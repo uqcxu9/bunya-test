@@ -3,3 +3,8 @@ figs/
 *.pkl
 logs/
 __pycache__/
+data/
+figs/
+*.pkl
+logs/
+__pycache__/
