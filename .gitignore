@@ -1,10 +1,23 @@
-data/
-figs/
-*.pkl
-logs/
+# Python 缓存
 __pycache__/
-data/
-figs/
+*.pyc
+*.pyo
+
+# 数据和模型
 *.pkl
+*.h5
+*.pt
+*.ckpt
+*.npz
+*.npy
+
+# 临时文件夹
+tmp/
 logs/
-__pycache__/
+out/
+runs/
+
+# IDE / 系统文件
+.vscode/
+.DS_Store
+*.swp
