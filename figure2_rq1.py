@@ -42,46 +42,46 @@ def load_dense_from_run(run_dir: str) -> Dict:
 # 2) 从 dense_log 按“月”提取：价格、就业、产出……
 # -----------------------------
 def extract_monthly(dense: Dict) -> pd.DataFrame:
-    """
-    期望结构：
-      dense['world']   -> list[ dict(..., 'Price': float, ...)]
-      dense['actions'] -> list[ dict(agent_id -> {'SimpleLabor': 0/1, ...}, 'p': ...)]
-      dense['states']  -> list[ dict(agent_id -> {'skill': float, ...})]
-    """
     world = dense.get("world")
     actions = dense.get("actions")
     states = dense.get("states")
     if not (isinstance(world, list) and isinstance(actions, list) and isinstance(states, list)):
         raise ValueError("dense_log doesn't have expected ['world','actions','states'] lists")
 
-    # 注意：world/states 往往比 actions 多一个“初始状态”
-    n_months = len(actions)
+    n_months = len(actions)  # world/states 通常多 1（含初始态）
     rows = []
     for m in range(n_months):
-        w = world[m+1] if len(world) == n_months + 1 else world[m]  # 兼容两种长度
-        a = actions[m]
-        s = states[m+1] if len(states) == n_months + 1 else states[m]
+        w = world[m + 1] if len(world) == n_months + 1 else world[m]
+        s = states[m + 1] if len(states) == n_months + 1 else states[m]
 
-        # 价格
-        price = w.get("Price", np.nan)
+        price = float(w.get("Price", np.nan))
 
-        # 就业统计：SimpleLabor == 1 视为就业
-        agent_ids = [k for k in a.keys() if k != "p"]
-        n_agents = len(agent_ids) if agent_ids else np.nan
-        employed = sum(1 for aid in agent_ids if isinstance(a.get(aid), dict) and a[aid].get("SimpleLabor", 0) == 1)
-        unemployment = 1.0 - (employed / n_agents) if n_agents and n_agents > 0 else np.nan
+        # 代理 id（排除聚合键）
+        agent_ids = [k for k in s.keys() if isinstance(k, str) and k.isdigit()]
 
-        # 平均工资（用 skill * 168）
+        employed = 0
+        total_real_output = 0.0
         wages = []
-        for aid in agent_ids:
-            if isinstance(s.get(aid), dict):
-                wage = s[aid].get("skill", 0.0) * 168
-                wages.append(wage)
-        avg_wage = float(np.mean(wages)) if wages else np.nan
 
-        # 月产出：把每个就业代理按 168 小时乘以单位生产率(=1)近似
-        productivity = 1.0
-        monthly_output = employed * 168 * productivity
+        for aid in agent_ids:
+            si = s.get(aid) or {}
+            endo = si.get("endogenous") or {}
+            labor_hours = float(endo.get("Labor", 0.0))  # 最终“实际工时”
+            skill = float(si.get("skill", 0.0))
+            # states 里自带本月真实产出
+            prod = float(si.get("production", 0.0))
+
+            if labor_hours > 0:
+                employed += 1
+
+            # 平均工资口径（skill × 实际工时）
+            wages.append(skill * labor_hours)
+
+            total_real_output += prod  # ★ 用实际产出，不要自己再近似
+
+        n_agents = len(agent_ids)
+        unemployment = 1.0 - (employed / n_agents) if n_agents > 0 else np.nan
+        avg_wage = float(np.mean(wages)) if wages else np.nan
 
         rows.append({
             "month": m + 1,
@@ -89,10 +89,72 @@ def extract_monthly(dense: Dict) -> pd.DataFrame:
             "unemployment": unemployment,
             "avg_wage": avg_wage,
             "employed": employed,
-            "output": monthly_output,
-            "n_agents": n_agents,
+            "real_output": total_real_output,  # 真实产出（不含价格）
+            "n_agents": n_agents if n_agents > 0 else np.nan,
         })
+
     return pd.DataFrame(rows)
+
+
+# def extract_monthly(dense: Dict) -> pd.DataFrame:
+#     """
+#     期望结构：
+#       dense['world']   -> list[ dict(..., 'Price': float, ...)]
+#       dense['actions'] -> list[ dict(agent_id -> {'SimpleLabor': 0/1, ...}, 'p': ...)]
+#       dense['states']  -> list[ dict(agent_id -> {'skill': float, ...})]
+#     """
+#     world = dense.get("world")
+#     actions = dense.get("actions")
+#     states = dense.get("states")
+#     if not (isinstance(world, list) and isinstance(actions, list) and isinstance(states, list)):
+#         raise ValueError("dense_log doesn't have expected ['world','actions','states'] lists")
+
+#     # 注意：world/states 往往比 actions 多一个“初始状态”
+#     n_months = len(actions)
+#     rows = []
+#     for m in range(n_months):
+#         w = world[m+1] if len(world) == n_months + 1 else world[m]  # 兼容两种长度
+#         a = actions[m]
+#         s = states[m+1] if len(states) == n_months + 1 else states[m]
+
+#         # 价格
+#         price = w.get("Price", np.nan)
+
+#         # 就业统计：SimpleLabor == 1 视为就业
+#         agent_ids = [k for k in a.keys() if k != "p"]
+#         n_agents = len(agent_ids) if agent_ids else np.nan
+#         employed = sum(1 for aid in agent_ids if isinstance(a.get(aid), dict) and a[aid].get("SimpleLabor", 0) == 1)
+#         unemployment = 1.0 - (employed / n_agents) if n_agents and n_agents > 0 else np.nan
+
+#         # 平均工资（用 skill * 168）
+#         wages = []
+#         for aid in agent_ids:
+#             if isinstance(s.get(aid), dict):
+#                 wage = s[aid].get("skill", 0.0) * 168
+#                 wages.append(wage)
+#         avg_wage = float(np.mean(wages)) if wages else np.nan
+
+#         # 月产出：把每个就业代理按 168 小时乘以单位生产率(=1)近似
+#         num_hours = 168
+#         total_real_output = 0.0
+#         for aid in agent_ids:
+#             ai = a.get(aid) or {}
+#             si = s.get(aid) or {}
+#             work_flag = 1 if ai.get("SimpleLabor", 0) == 1 else 0
+#             skill = float(si.get("skill", 0.0))
+#             total_real_output += work_flag * skill * num_hours
+
+
+#         rows.append({
+#             "month": m + 1,
+#             "price": price,
+#             "unemployment": unemployment,
+#             "avg_wage": avg_wage,
+#             "employed": employed,
+#             "real_output": total_real_output,
+#             "n_agents": n_agents,
+#         })
+#     return pd.DataFrame(rows)
 
 # -----------------------------
 # 3) 聚合到“年”（12 个月一组），计算通胀、名义/实际 GDP 及增长
@@ -115,10 +177,10 @@ def monthly_to_annual(df_monthly: pd.DataFrame, years: int = 20) -> pd.DataFrame
             break
         year_price = seg["price"].mean()
         year_unemp = seg["unemployment"].mean()
-        total_output = seg["output"].sum()
+        total_real_output = seg["real_output"].sum()
 
-        nominal_gdp = total_output * year_price
-        real_gdp = total_output * base_price
+        nominal_gdp = total_real_output * year_price
+        real_gdp = total_real_output * base_price
 
         if y > 1:
             prev = out[-1]
