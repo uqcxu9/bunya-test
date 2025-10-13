@@ -4,7 +4,7 @@ import fire
 import os
 import sys
 from datetime import datetime
-
+from collections import defaultdict, deque
 import ai_economist.foundation as foundation
 import numpy as np
 import matplotlib.pyplot as plt
@@ -297,52 +297,112 @@ def complex_actions(env, obs, beta=0.1, gamma=0.1, h=1):
     actions['p'] = [0]
     return actions
 
-
 def main(policy_model='gpt', num_agents=100, episode_length=240, dialog_len=3,
          beta=0.1, gamma=0.1, h=1, max_price_inflation=0.1, max_wage_inflation=0.05,
-         model_name='Qwen/Qwen2.5-72B-Instruct', save_dir='qwen_result'):
-
+         model_name='Qwen/Qwen2.5-72B-Instruct', save_dir='qwen_result',
+         resume_checkpoint=None):  # ✅ 新增恢复参数
+    
     env_config['n_agents'] = num_agents
     env_config['episode_length'] = episode_length
-
-    if policy_model == 'gpt':
-        total_cost = 0
-        env_config['flatten_masks'] = False
-        env_config['flatten_observations'] = False
-        env_config['components'][0]['SimpleLabor']['scale_obs'] = False
-        env_config['components'][1]['PeriodicBracketTax']['scale_obs'] = False
-        env_config['components'][3]['SimpleSaving']['scale_obs'] = False
-        env_config['components'][2]['SimpleConsumption']['max_price_inflation'] = max_price_inflation
-        env_config['components'][2]['SimpleConsumption']['max_wage_inflation'] = max_wage_inflation
-        gpt_error = 0
-        from collections import deque
-        dialog_queue = [deque(maxlen=dialog_len) for _ in range(env_config['n_agents'])]
-        dialog4ref_queue = [deque(maxlen=7) for _ in range(env_config['n_agents'])]
-
-    elif policy_model == 'complex':
-        env_config['components'][2]['SimpleConsumption']['max_price_inflation'] = max_price_inflation
-        env_config['components'][2]['SimpleConsumption']['max_wage_inflation'] = max_wage_inflation
-
-    t = time()
-    env = foundation.make_env_instance(**env_config)
-    obs = env.reset()
-    actions = {}
-
-    if policy_model == 'complex':
-        policy_model_save = f'{policy_model}-{beta}-{gamma}-{h}-{max_price_inflation}-{max_wage_inflation}'
-    elif policy_model == 'gpt':
-        perception_tag = 'perception' if USE_PERCEPTION else 'noperception'
-        reflection_tag = 'reflection' if USE_REFLECTION else 'noreflection'
-        policy_model_save = f'{policy_model}-{dialog_len}-{perception_tag}-{reflection_tag}-1'
+    
+    # ========== ✅ 恢复逻辑开始 ==========
+    if resume_checkpoint:
+        print("=" * 60)
+        print(f"🔄 RESUMING FROM CHECKPOINT")
+        print("=" * 60)
+        
+        # 解析检查点信息
+        checkpoint_dir = os.path.dirname(resume_checkpoint)
+        checkpoint_file = os.path.basename(resume_checkpoint)
+        checkpoint_step = int(checkpoint_file.split('_')[-1].replace('.pkl', ''))
+        
+        print(f"📂 Checkpoint directory: {checkpoint_dir}")
+        print(f"📍 Resuming from step: {checkpoint_step}")
+        
+        # 1. 加载环境
+        print(f"⏳ Loading environment...")
+        with open(resume_checkpoint, 'rb') as f:
+            env = pkl.load(f)
+        print(f"✅ Environment loaded (timestep: {env.world.timestep})")
+        
+        # 2. 加载观察
+        obs_file = f"{checkpoint_dir}/obs_{checkpoint_step}.pkl"
+        print(f"⏳ Loading observations from {obs_file}...")
+        with open(obs_file, 'rb') as f:
+            obs = pkl.load(f)
+        print(f"✅ Observations loaded")
+        
+        # 3. 加载对话历史（如果是 GPT 模式）
+        if policy_model == 'gpt':
+            dialog_file = f"{checkpoint_dir}/dialog_{checkpoint_step}.pkl"
+            dialog4ref_file = f"{checkpoint_dir}/dialog4ref_{checkpoint_step}.pkl"
+            
+            print(f"⏳ Loading dialog history...")
+            with open(dialog_file, 'rb') as f:
+                dialog_queue = pkl.load(f)
+            with open(dialog4ref_file, 'rb') as f:
+                dialog4ref_queue = pkl.load(f)
+            print(f"✅ Dialog history loaded")
+            
+            # 重置 cost 和 error 计数
+            total_cost = 0
+            gpt_error = 0
+        
+        # 4. 设置起始步数
+        start_step = checkpoint_step
+        
+        # 5. 确定保存路径（使用原来的路径）
+        policy_model_save = os.path.basename(checkpoint_dir)
+        base_save_path = os.path.dirname(os.path.dirname(checkpoint_dir)) + '/'
+        
+        print(f"📊 Progress: {start_step}/{episode_length} ({100*start_step//episode_length}%)")
+        print(f"📊 Remaining steps: {episode_length - start_step}")
+        print(f"💾 Saving to: {base_save_path}data/{policy_model_save}/")
+        print("=" * 60)
+        
+    # ========== ✅ 恢复逻辑结束 ==========
     else:
-        policy_model_save = f'{policy_model}'
-
-    policy_model_save = f'{policy_model_save}-{num_agents}agents-{episode_length}months'
-    base_save_path = f'./{save_dir}/'
-    os.makedirs(f'{base_save_path}data/{policy_model_save}', exist_ok=True)
-    os.makedirs(f'{base_save_path}figs/{policy_model_save}', exist_ok=True)
-
-    for epi in range(env.episode_length):
+        # 原有的初始化逻辑
+        if policy_model == 'gpt':
+            total_cost = 0
+            env_config['flatten_masks'] = False
+            env_config['flatten_observations'] = False
+            env_config['components'][0]['SimpleLabor']['scale_obs'] = False
+            env_config['components'][1]['PeriodicBracketTax']['scale_obs'] = False
+            env_config['components'][3]['SimpleSaving']['scale_obs'] = False
+            env_config['components'][2]['SimpleConsumption']['max_price_inflation'] = max_price_inflation
+            env_config['components'][2]['SimpleConsumption']['max_wage_inflation'] = max_wage_inflation
+            gpt_error = 0
+            dialog_queue = [deque(maxlen=dialog_len) for _ in range(env_config['n_agents'])]
+            dialog4ref_queue = [deque(maxlen=7) for _ in range(env_config['n_agents'])]
+        
+        elif policy_model == 'complex':
+            env_config['components'][2]['SimpleConsumption']['max_price_inflation'] = max_price_inflation
+            env_config['components'][2]['SimpleConsumption']['max_wage_inflation'] = max_wage_inflation
+        
+        t = time()
+        env = foundation.make_env_instance(**env_config)
+        obs = env.reset()
+        start_step = 0
+        
+        # 设置保存路径
+        if policy_model == 'complex':
+            policy_model_save = f'{policy_model}-{beta}-{gamma}-{h}-{max_price_inflation}-{max_wage_inflation}'
+        elif policy_model == 'gpt':
+            perception_tag = 'perception' if USE_PERCEPTION else 'noperception'
+            reflection_tag = 'reflection' if USE_REFLECTION else 'noreflection'
+            policy_model_save = f'{policy_model}-{dialog_len}-{perception_tag}-{reflection_tag}-1'
+        else:
+            policy_model_save = f'{policy_model}'
+        
+        policy_model_save = f'{policy_model_save}-{num_agents}agents-{episode_length}months'
+        base_save_path = f'./{save_dir}/'
+        os.makedirs(f'{base_save_path}data/{policy_model_save}', exist_ok=True)
+        os.makedirs(f'{base_save_path}figs/{policy_model_save}', exist_ok=True)
+    
+    # ========== 主训练循环 ==========
+    t = time()
+    for epi in range(start_step, env.episode_length):
         if policy_model == 'gpt':
             actions, gpt_error, total_cost = gpt_actions(
                 env, obs, dialog_queue, dialog4ref_queue,
@@ -356,15 +416,15 @@ def main(policy_model='gpt', num_agents=100, episode_length=240, dialog_len=3,
             actions['p'] = [0]
         else:
             raise ValueError(f"Unknown policy model: {policy_model}")
-
+        
         obs, rew, done, info = env.step(actions)
-
+        
         if (epi+1) % 3 == 0:
             print(f'step {epi+1} done, cost {time()-t:.1f}s')
             if policy_model == 'gpt':
                 print(f'#errors: {gpt_error}, token cost so far: ${total_cost:.1f}')
             t = time()
-
+        
         if (epi+1) % 6 == 0 or epi+1 == env.episode_length:
             with open(f'{base_save_path}data/{policy_model_save}/actions_{epi+1}.pkl', 'wb') as f:
                 pkl.dump(actions, f)
@@ -379,10 +439,11 @@ def main(policy_model='gpt', num_agents=100, episode_length=240, dialog_len=3,
                     pkl.dump(dialog4ref_queue, f)
             with open(f'{base_save_path}data/{policy_model_save}/dense_log_{epi+1}.pkl', 'wb') as f:
                 pkl.dump(env.dense_log, f)
-
+    
+    # ========== 保存最终结果 ==========
     with open(f'{base_save_path}data/{policy_model_save}/dense_log.pkl', 'wb') as f:
         pkl.dump(env.dense_log, f)
-
+    
     if policy_model == 'gpt':
         print(f'✅ Experiment finished. Total GPT errors: {gpt_error}')
         print(f'💰 Estimated token cost: ${total_cost:.2f}')

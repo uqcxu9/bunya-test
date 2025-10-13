@@ -42,62 +42,130 @@ def load_dense_from_run(run_dir: str) -> Dict:
 # 2) 从 dense_log 按“月”提取：价格、就业、产出……
 # -----------------------------
 def extract_monthly(dense: Dict) -> pd.DataFrame:
-    """
-    期望结构：
-      dense['world']   -> list[ dict(..., 'Price': float, ...)]
-      dense['actions'] -> list[ dict(agent_id -> {'SimpleLabor': 0/1, ...}, 'p': ...)]
-      dense['states']  -> list[ dict(agent_id -> {'skill': float, ...})]
-    """
     world = dense.get("world")
     actions = dense.get("actions")
     states = dense.get("states")
+
     if not (isinstance(world, list) and isinstance(actions, list) and isinstance(states, list)):
         raise ValueError("dense_log doesn't have expected ['world','actions','states'] lists")
 
-    # world/states 常比 actions 多 1（含初始态）
+    # === 添加调试信息（新版） ===
     n_months = len(actions)
+    print(f"数据长度: world={len(world)}, actions={n_months}, states={len(states)}")
+
+    if n_months > 0:
+        print("\n检查第1个月的完整 action 数据结构:")
+        a0 = actions[0]
+        first_ids = [k for k in a0.keys() if k != "p"][:5]  # 取前5个 agent
+        for aid in first_ids:
+            print(f"  Agent {aid}: {a0.get(aid, {})}")
+
+        total_agents = len([k for k in a0.keys() if k != "p"])
+        has_labor = sum(1 for aid in a0.keys() if aid != "p" and "SimpleLabor" in (a0.get(aid, {}) or {}))
+        print(f"\n  第1个月：共 {total_agents} 个 agent，其中 {has_labor} 个包含 SimpleLabor 字段")
+    # === 调试信息结束 ===
+
     rows = []
     for m in range(n_months):
-        w = world[m+1] if len(world) == n_months + 1 else world[m]
+        w = world[m + 1] if len(world) == n_months + 1 else world[m]
         a = actions[m]
-        s = states[m+1] if len(states) == n_months + 1 else states[m]
+        s = states[m + 1] if len(states) == n_months + 1 else states[m]
 
-        price = float(w.get("Price", float("nan")))
+        # --- 价格、供需缺口 ---
+        price = float(w.get("Price", np.nan))
+        supply = w.get("GoodsSupply", np.nan)
+        demand = w.get("GoodsDemand", np.nan)
+        phi = (demand - supply) / max(demand, supply) if (demand and supply) else np.nan
 
-        # 代理 ID（排除 'p'）
+        # --- 就业与工资 ---
         agent_ids = [k for k in a.keys() if k != "p"]
         n_agents = len(agent_ids)
 
-        # —— 就业：以行动 SimpleLabor==1 为“工作”
-        employed = 0
-        # —— 真实产出：∑ (是否工作) × skill × 168
-        total_real_output = 0.0
-        # —— 平均工资：平均(skill × 168)
-        wages = []
+# 缺省 SimpleLabor 视为 0（不工作）
+        employed = sum(
+            1
+            for aid in agent_ids
+            if (a.get(aid, {}) or {}).get("SimpleLabor", 0) >= 1
+        )
+        unemployment = 1.0 - employed / n_agents if n_agents > 0 else np.nan
 
+        # --- 工资与产出 ---
+        avg_wage = np.mean([s.get(aid, {}).get("skill", 0) * 168 for aid in agent_ids]) if agent_ids else np.nan
+        total_output = 0.0
         for aid in agent_ids:
-            ai = a.get(aid) or {}
-            si = s.get(aid) or {}
-            work_flag = int(bool(ai.get("SimpleLabor", 0)))
-            skill = float(si.get("skill", 0.0))
-            wage = skill * 168.0
-            employed += work_flag
-            total_real_output += work_flag * wage
-            wages.append(wage)
-
-        unemployment = 1.0 - (employed / n_agents) if n_agents > 0 else float("nan")
-        avg_wage = float(np.mean(wages)) if wages else float("nan")
+            if a.get(aid, {}).get("SimpleLabor", 0) > 0.5:  # 如果工作
+                skill = s.get(aid, {}).get("skill", 0.0)
+                total_output += skill * 168  # skill × 168小时
 
         rows.append({
             "month": m + 1,
             "price": price,
             "unemployment": unemployment,
             "avg_wage": avg_wage,
-            "employed": employed,
-            "real_output": total_real_output,   # 关键：真实产出（不含价格）
-            "n_agents": n_agents,
+            "real_output": total_output,
+            "phi": phi,
         })
+
     return pd.DataFrame(rows)
+
+
+# def extract_monthly(dense: Dict) -> pd.DataFrame:
+#     """
+#     期望结构：
+#       dense['world']   -> list[ dict(..., 'Price': float, ...)]
+#       dense['actions'] -> list[ dict(agent_id -> {'SimpleLabor': 0/1, ...}, 'p': ...)]
+#       dense['states']  -> list[ dict(agent_id -> {'skill': float, ...})]
+#     """
+#     world = dense.get("world")
+#     actions = dense.get("actions")
+#     states = dense.get("states")
+#     if not (isinstance(world, list) and isinstance(actions, list) and isinstance(states, list)):
+#         raise ValueError("dense_log doesn't have expected ['world','actions','states'] lists")
+
+#     # world/states 常比 actions 多 1（含初始态）
+#     n_months = len(actions)
+#     rows = []
+#     for m in range(n_months):
+#         w = world[m+1] if len(world) == n_months + 1 else world[m]
+#         a = actions[m]
+#         s = states[m+1] if len(states) == n_months + 1 else states[m]
+
+#         price = float(w.get("Price", float("nan")))
+
+#         # 代理 ID（排除 'p'）
+#         agent_ids = [k for k in a.keys() if k != "p"]
+#         n_agents = len(agent_ids)
+
+#         # —— 就业：以行动 SimpleLabor==1 为“工作”
+#         employed = 0
+#         # —— 真实产出：∑ (是否工作) × skill × 168
+#         total_real_output = 0.0
+#         # —— 平均工资：平均(skill × 168)
+#         wages = []
+
+#         for aid in agent_ids:
+#             ai = a.get(aid) or {}
+#             si = s.get(aid) or {}
+#             work_flag = int(bool(ai.get("SimpleLabor", 0)))
+#             skill = float(si.get("skill", 0.0))
+#             wage = skill * 168.0
+#             employed += work_flag
+#             total_real_output += work_flag * wage
+#             wages.append(wage)
+
+#         unemployment = 1.0 - (employed / n_agents) if n_agents > 0 else float("nan")
+#         avg_wage = float(np.mean(wages)) if wages else float("nan")
+
+#         rows.append({
+#             "month": m + 1,
+#             "price": price,
+#             "unemployment": unemployment,
+#             "avg_wage": avg_wage,
+#             "employed": employed,
+#             "real_output": total_real_output,   # 关键：真实产出（不含价格）
+#             "n_agents": n_agents,
+#         })
+#     return pd.DataFrame(rows)
 
 
 # -----------------------------
@@ -123,7 +191,7 @@ def monthly_to_annual(df_monthly: pd.DataFrame, years: int = 20) -> pd.DataFrame
         year_unemp = seg["unemployment"].mean()
         total_real_output = seg["real_output"].sum()
 
-        nominal_gdp = total_real_output * year_price
+        nominal_gdp = (seg["real_output"] * seg["price"]).sum()
         real_gdp = total_real_output * base_price
 
         if y > 1:
@@ -154,7 +222,6 @@ def plot_figure2_multi(annual_map: Dict[str, pd.DataFrame], save_path: str):
     annual_map: {label -> annual_df}
     """
     fig, axes = plt.subplots(2, 2, figsize=(10, 8))
-    # 颜色/线型可按论文图自定义（这里只给出简单示例）
     styles = {
         "LEN": {"ls": "--"},
         "CATS": {"ls": ":"},
@@ -163,6 +230,7 @@ def plot_figure2_multi(annual_map: Dict[str, pd.DataFrame], save_path: str):
         "EconAgent": {"ls": "-", "lw": 2},
     }
 
+    # -------- 绘制所有曲线 --------
     for label, df in annual_map.items():
         years = df["year"].values
         st = styles.get(label, {"ls": "-"})
@@ -173,34 +241,36 @@ def plot_figure2_multi(annual_map: Dict[str, pd.DataFrame], save_path: str):
         # (b) Unemployment
         axes[0, 1].plot(years, df["unemployment"].values, label=label, **st)
 
-        # (c) Nominal GDP
-        axes[1, 0].plot(years, df["nominal_gdp"].values, label=label, **st)
+        # (c) Nominal GDP（除以 1000 以免数值太大）
+        axes[1, 0].plot(years, df["nominal_gdp"].values / 1e3, label=label, **st)
 
         # (d) Nominal GDP Growth
         axes[1, 1].plot(years, df["nominal_gdp_growth"].values, label=label, **st)
 
-    # 轴样式尽量贴近论文
-    axes[0, 0].set_title("Inflation Rate");       axes[0, 0].axhline(0, color="k", ls="--", alpha=0.3)
+    # -------- 设置样式 --------
+    axes[0, 0].set_title("Inflation Rate")
+    axes[0, 0].axhline(0, color="k", ls="--", alpha=0.3)
+
     axes[0, 1].set_title("Unemployment Rate")
-    axes[1, 0].set_title("Nominal GDP");          axes[1, 0].ticklabel_format(axis="y", style="sci", scilimits=(6,6))
-    axes[1, 1].set_title("Nominal GDP Growth");   axes[1, 1].axhline(0, color="k", ls="--", alpha=0.3)
+
+    axes[1, 0].set_title("Nominal GDP (×10³)")
+    axes[1, 0].ticklabel_format(axis="y", style="plain")
+
+    axes[1, 1].set_title("Nominal GDP Growth")
+    axes[1, 1].axhline(0, color="k", ls="--", alpha=0.3)
 
     for ax in axes.ravel():
-        ax.set_xlabel("year")
+        ax.set_xlabel("Year")
         ax.grid(True, alpha=0.3)
 
-    # y 轴范围可按论文大致设置（你也可注释掉让它自适应）
-    axes[0, 0].set_ylim(-0.25, 0.25)
-    axes[0, 1].set_ylim(0.0, 0.12)
-    axes[1, 1].set_ylim(-0.25, 0.25)
-
-    # 图例放在顶部横排
+    # -------- 图例与保存 --------
     handles, labels = axes[0, 0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="upper center", ncol=min(5, len(labels)))
     plt.tight_layout(rect=[0, 0, 1, 0.92])
     plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"[OK] Figure saved to {save_path}")
+
 
 # -----------------------------
 # 5) CLI
@@ -217,12 +287,26 @@ def main():
     args = parser.parse_args()
 
     annual_map: Dict[str, pd.DataFrame] = {}
+    
     for item in args.runs:
         if "=" not in item:
             raise ValueError("Each --runs item must be Label=Path")
         label, path = item.split("=", 1)
+        
+        # 打印处理信息
+        print(f"\n{'='*50}")
+        print(f"处理: {label} - {path}")
+        print(f"{'='*50}")
+        
+        # 只读取一次
         dense = load_dense_from_run(path)
         monthly = extract_monthly(dense)
+        
+        # 打印失业率统计来验证
+        print(f"失业率统计: min={monthly['unemployment'].min():.4f}, "
+              f"max={monthly['unemployment'].max():.4f}, "
+              f"mean={monthly['unemployment'].mean():.4f}")
+        
         annual = monthly_to_annual(monthly, years=20)
         annual_map[label] = annual
 

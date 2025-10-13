@@ -9,7 +9,7 @@ import os
 import multiprocessing
 import scipy
 
-save_path = './'
+save_path = './qwen_result/'
 
 brackets = list(np.array([0, 97, 394.75, 842, 1607.25, 2041, 5103])*100/12)
 quantiles = [0, 0.25, 0.5, 0.75, 1.0]
@@ -49,44 +49,59 @@ def prettify_document(document: str) -> str:
     return cleaned
 
 
-def get_multiple_completion(dialogs, num_cpus=15, temperature=0, max_tokens=100):
-    from functools import partial
-    get_completion_partial = partial(get_completion, temperature=temperature, max_tokens=max_tokens)
+def get_multiple_completion(dialogs, num_cpus=15, temperature=0, max_tokens=100, model_name=None):
     processes = max(1, min(num_cpus, len(dialogs)))
+    args = [(d, temperature, max_tokens, model_name) for d in dialogs]
     with multiprocessing.Pool(processes=processes) as pool:
-        results = pool.map(get_completion_partial, dialogs)
-    total_cost = sum([cost for _, cost in results])
-    return [response for response, _ in results], total_cost
+        results = pool.starmap(get_completion, args)
+    total_cost = sum(cost for _, cost in results)
+    return [resp for resp, _ in results], total_cost
 
-def get_completion(dialogs, temperature=0, max_tokens=100):
-    # OpenAI Python SDK >= 1.0.0 interface
-    from openai import OpenAI
-    if not _OPENAI_API_KEY:
-        raise RuntimeError("OPENAI_API_KEY 未配置。请导出环境变量 OPENAI_API_KEY 或在 config.yaml 中提供 openai_api_key。")
-    client = OpenAI(api_key=_OPENAI_API_KEY)
+def get_completion(dialogs, temperature=0, max_tokens=100, model_name=None):
+    import os
     import time
-    
+    from openai import OpenAI
+
+    # ✅ 设置默认的 DashScope OpenAI 兼容接口
+    api_base = os.getenv(
+        "OPENAI_API_BASE",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    )
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key or api_key == "EMPTY":
+        raise ValueError("❌ OPENAI_API_KEY 未设置，请先 export 你的百炼 API Key")
+
+    # ✅ 正确的 Qwen 模型名称
+    model = model_name or os.getenv("OPENAI_MODEL", "qwen2.5-7b-instruct")
+
+    # ✅ 初始化客户端
+    client = OpenAI(
+        base_url=api_base,
+        api_key=api_key
+    )
+
     max_retries = 20
     for i in range(max_retries):
         try:
             response = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=model,
                 messages=dialogs,
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
-            # usage stats present in v1
             prompt_tokens = getattr(response.usage, 'prompt_tokens', 0) or 0
             completion_tokens = getattr(response.usage, 'completion_tokens', 0) or 0
-            this_cost = prompt_tokens/1000*prompt_cost_1k + completion_tokens/1000*completion_cost_1k
+
+            # ⚠️ prompt_cost_1k、completion_cost_1k 需在外部定义（或在这里设置默认值）
+            this_cost = prompt_tokens / 1000 * prompt_cost_1k + completion_tokens / 1000 * completion_cost_1k
             content = response.choices[0].message.content
             return content, this_cost
+
         except Exception as e:
             if i < max_retries - 1:
                 time.sleep(6)
             else:
-                print(f"An error of type {type(e).__name__} occurred: {e}")
-                # Ensure consistent return type for callers expecting a tuple
+                print(f"❌ An error of type {type(e).__name__} occurred: {e}")
                 return "Error", 0.0
 
 def format_numbers(numbers):

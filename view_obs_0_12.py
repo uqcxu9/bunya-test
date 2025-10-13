@@ -1,0 +1,92 @@
+import pickle
+
+def view_agent0_obs(filename):
+    """查看指定obs文件中Agent 0的观测信息"""
+    print(f'=== {filename} 中 Agent 0 的观测信息 ===')
+    
+    try:
+        with open(f'data/gpt-3-perception-reflection-1-100agents-240months/{filename}', 'rb') as f:
+            obs = pickle.load(f)
+        
+        if '0' in obs:
+            agent_0_obs = obs['0']
+            print('Agent 0 的详细观测信息:')
+            print('=' * 60)
+            
+            for key, value in agent_0_obs.items():
+                print(f'{key}: {value}')
+            
+            print()
+            print('Agent 0 的关键信息摘要:')
+            print('=' * 60)
+            
+            # 显示关键信息
+            key_info = {
+                '时间': agent_0_obs.get('time', 'N/A'),
+                '技能': agent_0_obs.get('SimpleLabor-skill', 'N/A'),
+                '年龄': agent_0_obs.get('SimpleLabor-age', 'N/A'),
+                '财富': agent_0_obs.get('SimpleSaving-wealth', 'N/A'),
+                '价格': agent_0_obs.get('SimpleConsumption-price', 'N/A'),
+                '消费率': agent_0_obs.get('SimpleConsumption-Consumption Rate', 'N/A'),
+                '储蓄回报': agent_0_obs.get('SimpleSaving-Saving Return', 'N/A'),
+                '是否税收日': agent_0_obs.get('PeriodicBracketTax-is_tax_day', 'N/A'),
+                '税收阶段': agent_0_obs.get('PeriodicBracketTax-tax_phase', 'N/A'),
+                '边际税率': agent_0_obs.get('PeriodicBracketTax-marginal_rate', 'N/A')
+            }
+            
+            for key, value in key_info.items():
+                print(f'{key}: {value}')
+                
+        else:
+            print('错误: Agent 0 不存在于该文件中')
+            
+    except FileNotFoundError:
+        print(f'错误: 文件 {filename} 不存在')
+    except Exception as e:
+        print(f'错误: {e}')
+
+# 查看 obs_0.pkl 中的 Agent 0
+print("查看 obs_0.pkl 中的 Agent 0:")
+view_agent0_obs('obs_0.pkl')
+
+print("\n" + "="*80 + "\n")
+
+# 查看 obs_12.pkl 中的 Agent 0
+print("查看 obs_12.pkl 中的 Agent 0:")
+view_agent0_obs('obs_12.pkl')
+
+print("\n" + "="*80 + "\n")
+
+# 对比分析
+print("=== 对比分析 obs_0 vs obs_12 ===")
+try:
+    with open('data/gpt-3-perception-reflection-1-100agents-240months/obs_0.pkl', 'rb') as f:
+        obs_0 = pickle.load(f)
+    with open('data/gpt-3-perception-reflection-1-100agents-240months/obs_12.pkl', 'rb') as f:
+        obs_12 = pickle.load(f)
+    
+    if '0' in obs_0 and '0' in obs_12:
+        agent_0 = obs_0['0']
+        agent_12 = obs_12['0']
+        
+        print("关键指标变化:")
+        print(f"时间: {agent_0.get('time', 'N/A')} -> {agent_12.get('time', 'N/A')}")
+        print(f"技能: {agent_0.get('SimpleLabor-skill', 'N/A'):.3f} -> {agent_12.get('SimpleLabor-skill', 'N/A'):.3f}")
+        print(f"财富: {agent_0.get('SimpleSaving-wealth', 'N/A'):.2f} -> {agent_12.get('SimpleSaving-wealth', 'N/A'):.2f}")
+        print(f"消费率: {agent_0.get('SimpleConsumption-Consumption Rate', 'N/A'):.2f} -> {agent_12.get('SimpleConsumption-Consumption Rate', 'N/A'):.2f}")
+        print(f"价格: {agent_0.get('SimpleConsumption-price', 'N/A'):.3f} -> {agent_12.get('SimpleConsumption-price', 'N/A'):.3f}")
+        
+        # 计算变化
+        wealth_0 = agent_0.get('SimpleSaving-wealth', 0)
+        wealth_12 = agent_12.get('SimpleSaving-wealth', 0)
+        if wealth_0 != 0:
+            wealth_change = ((wealth_12 - wealth_0) / wealth_0) * 100
+            print(f"财富变化: {wealth_change:.1f}%")
+            
+except Exception as e:
+    print(f"对比分析错误: {e}")
+
+
+
+
+
